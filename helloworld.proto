@@ -1,0 +1,15 @@
+option cc_generic_services = true;
+
+message FooRequest {
+	required string text = 1;
+	optional int32 times = 2;
+}
+
+message FooResponse {
+	required string text = 1;
+	optional bool result = 2;
+}
+
+service Echo {
+	rpc Foo(FooRequest) returns(FooResponse);
+}

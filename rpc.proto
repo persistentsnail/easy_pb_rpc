@@ -1,0 +1,19 @@
+package RPC;
+
+option cc_generic_services = true;
+
+message RpcRequestData {
+	required uint32 service_id = 1;
+	required uint32 method_id = 2;
+	required uint32 call_id = 3;
+
+	required bytes content = 4; 
+}
+
+message RpcResponseData {
+	required uint32 call_id = 1;
+	required bytes content = 2;
+}
+
+
+
