@@ -130,7 +130,22 @@ inline int RpcDataSender(char *data_buf, size_t length, void *caller)
 	return 1;
 }
 
-int main(int argc, char *argv[])
+inline void InitRpcService()
+{
+	if (RpcServiceStartup() != 0)
+		ErrorExit("RpcServiceStartup Failed");
+	EchoServiceImpl *echo_impl = new EchoServiceImpl();
+	RpcServiceMgr *mgr = RpcServiceMgrInstance(RpcDataSender);
+	::google::protobuf::ServiceDescriptor *service_desc = echo_impl->GetDescriptor();
+	unsigned int service_id = RpcServiceName2Id(service_desc->name());
+	if (service_id == INVALID_SERVICE_ID) 
+		ErrorExit("Got Invalid Service Id");
+	
+	if (RegisterRpcService(mgr, echo_impl, service_id) != 0)
+		ErrorExit("RegisterRpcService Failed");
+}
+
+inline void StartListen()
 {
 	evutil_socket_t listener;
 	struct sockaddr_in sin;
@@ -157,5 +172,11 @@ int main(int argc, char *argv[])
 	listener_event = event_new(ev_base, listener, EV_READ | EV_PERSIST, DoAccept, (void*)ev_base);
 	event_add(listener_event, NULL);
 	event_base_dispatch(ev_base);
+}
+
+int main(int argc, char *argv[])
+{
+	InitRpcService();
+	StartListen();
 	return 0;
 }

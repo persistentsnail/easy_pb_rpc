@@ -10,6 +10,6 @@ message FooResponse {
 	optional bool result = 2;
 }
 
-service Echo {
+service EchoService {
 	rpc Foo(FooRequest) returns(FooResponse);
 }
