@@ -49,9 +49,9 @@ namespace PBRPC {
 		};
 
 	private:
-		RpcSendFuncType _sender;
 		RpcClient *_client;
-		int _conn_fd;
+		void * _handle;
+		string _conn_str;
 		CallMgr _call_mgr;
 	public:
 		RpcChannel(RpcClient *client, const char *connect_str);
@@ -59,5 +59,10 @@ namespace PBRPC {
 		virtual void CallMethod(const MethodDescriptor *method, RpcController *controller,
 				const Message *request, const Message *response, Closure *done);
 		void HandleRpcResponse(unsigned char *response_data, size_t length);
+
+		inline void SetHandle(void * handle) { _handle = handle; }
+		inline void GetHandle() { return _handle; }
+	protected:
+		void DisConnect();
 	};
 }

@@ -7,6 +7,10 @@ using namespace PBRPC;
 
 void RpcChannel::CallMethod(const MethodDescriptor *method,	::google::protobuf::RpcController *controller,
 								const Message *request, Message *response,	Closure *done) {
+	if (!_handle)
+		_handle = _client->Connect(_conn_str, controller);
+	if (!_handle) return;
+
 	RPC:RpcRequestData rpc_data;
 	const string &service_name = method->service()->name();
 	unsigned int service_id = RpcServiceName2Id(service_name);
@@ -30,14 +34,13 @@ void RpcChannel::CallMethod(const MethodDescriptor *method,	::google::protobuf::
 	
 	the_call->_cb_data._c = done;
 	the_call->_cb_data._arg = response;
+	_client->DoRpc(this, serialized_str.c_str(), serialized_str.size());
 	if (done == NULL) // synchronous
-		_client->DoRpc_sync(this, serialized_str.c_str(), serialized_str.size());
-	else
-		_client->DoRpc_async(this, serialized_str.c_str(), serialized_str.size());
+		_client->Wait();
 }
 
 
-void RpcServiceConnector::HandleRpcResponse(unsigned char *response_data, size_t length) {
+void RpcChannel::HandleRpcResponse(unsigned char *response_data, size_t length) {
 	RPC::RpcResponseData rpc_data;
 	rpc_data.ParseFromArray(response_data, length);
 	unsigned int call_id = rpc_data.call_id();
@@ -53,6 +56,10 @@ void RpcServiceConnector::HandleRpcResponse(unsigned char *response_data, size_t
 	_call_mgr.Free(call_id);
 }
 
-RpcChannel::RpcChannel(RpcClient *client, const char *connect_str):_client(client) {
-	_conn_fd = _client->Connect(connect_str);
+RpcChannel::RpcChannel(RpcClient *client, const char *connect_str):_client(client),
+	_conn_str(connect_str), _handle(NULL) {
+}
+
+RpcChannel::~RpcChannel() {
+	DisConnect();
 }
