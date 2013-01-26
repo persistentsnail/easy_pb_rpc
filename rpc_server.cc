@@ -103,17 +103,19 @@ void RpcServer::RemoveConnection(Connection *conn) {
 }
 
 void RpcServer::ProcessRpcData(Connection *conn, struct evbuffer *input) {
-	size_t buf_len = evbuffer_get_length(input);
+	size_t buf_len;
 
 	for (;;) {
 		switch (conn->_state) {
 			case Connection::ST_HEAD : {
+				buf_len = evbuffer_get_length(input);
 				if (buf_len < HEAD_LEN) return;
 				evbuffer_remove(input, &conn->_data_length, HEAD_LEN);
-				conn->_state = Connection::ST_HEAD;
+				conn->_state = Connection::ST_DATA;
 				break;
 			}
 			case Connection::ST_DATA : {
+				buf_len = evbuffer_get_length(input);
 				if (buf_len < conn->_data_length) return;
 				std::string ret_str;
 				_service_mgr->RpcCallHandle(evbuffer_pullup(input, conn->_data_length), conn->_data_length, ret_str);

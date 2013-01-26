@@ -7,59 +7,58 @@ using namespace PBRPC;
 
 void RpcChannel::CallMethod(const MethodDescriptor *method,	::google::protobuf::RpcController *controller,
 								const Message *request, Message *response,	Closure *done) {
-	if (!_handle)
-		_handle = _client->Connect(_conn_str, controller);
-	if (!_handle) return;
+	if (!_session_id) {
+		Connect(controller);
+		if (controller->Failed()) return;
+	}
 
-	RPC:RpcRequestData rpc_data;
 	const string &service_name = method->service()->name();
 	unsigned int service_id = RpcServiceName2Id(service_name);
 	if (service_id == INVALID_SERVICE_ID) {
 		controller->SetFailed("The Service Not Support!");
 		return;
 	}
-	rpc_data->set_service_id(service_id);
-	rpc_data->set_method_id(method->index());
-	CallData *the_call = _call_mgr.Alloc();
-	if (!the_call) {
-		controller->SetFailed("Alloc Call  Failed!");
-		return;
-	}
-	rpc_data->set_call_id(the_call->_callId);
-	std::string content;
-	request->SerializeToString(&content);
-	rpc_data->set_content(content);
-	std::string serialized_str; 
-	rpc_data->SerializeToString(&serialized_str);
+	std::string * content =  new std::string;
+	request->SerializeToString(content);
+	_client->CallMsgEnqueue(_session_id, content, service_id, method->index(),
+		controller, response, c, _write_pipe);
 	
-	the_call->_cb_data._c = done;
-	the_call->_cb_data._arg = response;
-	_client->DoRpc(this, serialized_str.c_str(), serialized_str.size());
-	if (done == NULL) // synchronous
-		_client->Wait();
+	if (!c) {
+		char buf;
+		read(_read_pipe, &buf, sizeof(buf));
+	}
 }
 
+RpcChannel::RpcChannel(RpcClient *client, const char *connect_str):_client(client), _conn_str(connect_str) {	
+	int pipefd[2];
+	pipe(pipefd);
+	_write_pipe = pipefd[1];
+	_read_pipe = pipefd[0];
+}
 
-void RpcChannel::HandleRpcResponse(unsigned char *response_data, size_t length) {
-	RPC::RpcResponseData rpc_data;
-	rpc_data.ParseFromArray(response_data, length);
-	unsigned int call_id = rpc_data.call_id();
-	CallData *the_call;
-	if (!(the_call = _call_mgr.Get(call_id))) {
-		ERR_LOG("HandleRpcResponse Failed : No Callback");
+void RpcChannel::Connect(google::protobuf::RpcController *controller) {
+	size_t split_pos = _conn_str.find(':');
+	if (split_pos == std::string::npos)	{ 
+		controller->SetFailed("Error connect string : ");
 		return;
 	}
-	Closure *c = the_call->_cb_data._c;
-	Message *response = the_call->_cb_data._arg;
-	response->ParseFromString(rpc_data.content());
-	if (c)	c->Run();
-	_call_mgr.Free(call_id);
-}
+	std::string ip_str = _conn_str.substr(0, split_pos);
+	std::string port_str = _conn_str.substr(split_pos + 1);
 
-RpcChannel::RpcChannel(RpcClient *client, const char *connect_str):_client(client),
-	_conn_str(connect_str), _handle(NULL) {
+	struct in_addr ip;
+	if (inet_aton(ip_str, &ip) == 0) {
+		controller->SetFailed("Invalid connect Ip");
+		return;
+	}
+	unsigned short port;
+	std::stringstream ss(port_str);
+	ss >> port;
+	_session_id = _client->AllocSession();
+	_client->ConnectMsgEnqueue(_session_id, controller, ip, port);
 }
 
 RpcChannel::~RpcChannel() {
-	DisConnect();
+	close(_write_pipe);
+	close(_read_pipe);
+	_client->FreeSession(_session_id);
 }
