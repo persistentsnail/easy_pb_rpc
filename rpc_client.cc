@@ -12,32 +12,6 @@
 
 using namespace PBRPC;
 
-/*
-void eventcb(struct bufferevent *bev, short events, void *ptr)
-{
-    if (events & BEV_EVENT_CONNECTED) {
-		
-	} else if (events & BEV_EVENT_ERROR) {
-		RpcChannel *channel = (RpcChannel *)ptr;
-		channel->DisConnect();
-	}
-}
-
-void *RpcClient::Connect(const std::string &con_str, google::protobuf::RpcController *controller, RpcChannel *channel) {
-	sin.sin_port = htons(port);
-	sin.sin_family = AF_INET;
-
-	bufferevent *bev = bufferevent_socket_new(_evbase, -1, BEV_OPT_CLOSE_ON_FREE);
-	bufferevent_setcb(bev, readcb, NULL, eventcb, channel); 
-	if (bufferevent_socket_connect(bev, (struct sockaddr *)&sin, sizeof(sin)) < 0) {
-		bufferevent_free(bev);
-		controller->SetFailed("Connect Failed");
-		return NULL;
-	}
-	return bev;
-}
-*/
-
 inline void RpcCallBack( google::protobuf::Closure *c, int wake_fd) {
 	if (c) {
 		c->Run();
@@ -57,35 +31,7 @@ inline void ErrorCb(struct bufferevent *bev, short error, void *arg) {
 inline void ReadCb(struct bufferevent *bev, void *ptr) {
 	Session *the_session = (Session *)ptr;
 	struct evbuffer *input = bufferevent_get_input(bev);
-	size_t buf_len;
-	for (;;) {
-		switch (the_session->_state) {
-			case Session::ST_HEAD: {
-				buf_len = evbuffer_get_length(input);
-				if (buf_len < HEAD_LEN) return ;
-				evbuffer_remove(input, &the_session->_data_length, HEAD_LEN);
-				the_session->_state = Session::ST_DATA;
-				break;
-			}
-			case Session::ST_DATA: {
-				buf_len = evbuffer_get_length(input);
-				if (buf_len < the_session->_data_length) return ;
-				RPC::RpcResponseData rpc_data;
-				rpc_data.ParseFromArray(evbuffer_pullup(input, the_session->_data_length));
-				Session::TCallBack *cb = the_session->GetCallBack(rpc_data.call_id());
-				if (cb) {
-					cb->_response->ParseFromString(rpc_data.content());
-					RpcCallBack(cb->_c, cb->_wake_fd);
-				}
-				the_session->_state = Session::ST_HEAD;
-				break;
-			}
-			default: {
-				ERR_LOG("Error Session state");
-				break;
-			}
-		}
-	}
+	the_session->OnCallBack(input);
 }
 
 inline void DoRpc(int notifier_read_handle, short event, void *arg) {
@@ -101,58 +47,11 @@ inline void DoRpc(int notifier_read_handle, short event, void *arg) {
 		ERR_LOG("DoRpc Failed : Wrong session Id");
 		return;
 	}
+	Session *the_session = this_clt->GetSession(msg->_session_id);
 	if (msg->_kind == MessageQueue::CONNECT) {
-		Session *the_session = this_clt->GetSession(msg->_session_id);
-
-		struct sockaddr_in sin;
-		memset(&sin, 0, sizeof(sin));
-		sin.sin_family = AF_INET;
-		sin.sin_addr = msg->_connect._ip;
-		sin.sin_port = msg->_connect._port;
-		bufferevent *bev = bufferevent_socket_new(_evbase, -1, BEV_OPT_CLOSE_ON_FREE);
-		bufferevent_setcb(bev, ReadCb, NULL, ErrorCb, the_session); 
-		if (bufferevent_socket_connect(bev, (struct sockaddr *)&sin, sizeof(sin))<0) {
-			bufferevent_free(bev);
-			msg->_controller->SetFailed("Connect Failed");
-		} else 
-			the_session->InitSession(bev);
-
+		the_session->Connect(msg);
 	} else if (msg->_kind == MessageQueue::CALL) {
-		unsigned int call_id = 0;
-		Session *the_session = this_clt->GetSession(msg->_session_id);
-		struct bufferevent *bev = the_session->_bev;
-
-		if (!bev) {
-			msg->_controller->SetFailed("Session has disconnect");
-			goto CALL_FINALLY;
-		}
-
-		call_id = the_session->AllocCallId();
-		Session::TCallBack *cb = the_session->GetCallBack(call_id);
-		cb._controller = msg->_call._cb._controller;
-		cb._response = msg->_call._cb._response;
-		cb._c = msg->_call._cb._c;
-		cb._wake_fd = msg->_call._cb._wake_fd;
-
-		RPC::RpcRequestData rpc_data;
-
-		rpc_data.set_call_id(call_id);
-		rpc_data.set_service_id(msg->_call._service_id);
-		rpc_data.set_method_id(msg->_call._method_id);
-		rpc_data.set_content(*msg->_call._req_data);
-		std::string data_buf;
-		rpc_data.SerializeToString(&data_buf);
-		if (-1 == bufferevent_write(bev, data_buf.c_str(), data_buf.size())) {
-			msg->_controller->SetFailed("bufferevent_write Failed");
-		}
-	CALL_FINALLY:
-		if (msg->_call._req_data)
-			delete msg->_call._req_data;
-		if (msg->_controller->Failed()) {
-			RpcCallBack(cb._c, cb._wake_fd);
-			if (call_id != 0)
-				the_session->FreeCallId();
-		}
+		the_session->DoRpcCall(msg);
 	}
 	delete msg;
 }
@@ -167,6 +66,89 @@ inline void * ThreadEntry(void *arg) {
 		DoRpc, arg);
 	event_add(listener, NULL);
 	event_base_dispatch(evbase);
+}
+
+void Session::Connect(MessageQueue::Node *conn_msg) {
+	struct sockaddr_in sin;
+	memset(&sin, 0, sizeof(sin));
+	sin.sin_family = AF_INET;
+	sin.sin_addr = conn_msg->_connect._ip;
+	sin.sin_port = conn_msg->_connect._port;
+	bufferevent *bev = bufferevent_socket_new(_evbase, -1, BEV_OPT_CLOSE_ON_FREE);
+	bufferevent_setcb(bev, ReadCb, NULL, ErrorCb, this); 
+	if (bufferevent_socket_connect(bev, (struct sockaddr *)&sin, sizeof(sin))<0) {
+		bufferevent_free(bev);
+		conn_msg->_controller->SetFailed("Connect Failed");
+	} else 
+		the_session->InitSession(bev);
+}
+
+void Session::DoRpcCall(MessageQueue::Node *call_msg) {
+	if (!_bev) {
+		call_msg->_controller->SetFailed("Session has disconnect");
+		goto CALL_FINALLY;
+	}
+
+	unsigned int call_id = 0;
+	call_id = AllocCallId();
+	TCallBack *cb = GetCallBack(call_id);
+	cb._controller = call_msg->_call._cb._controller;
+	cb._response = call_msg->_call._cb._response;
+	cb._c = call_msg->_call._cb._c;
+	cb._wake_fd = call_msg->_call._cb._wake_fd;
+
+	RPC::RpcRequestData rpc_data;
+
+	rpc_data.set_call_id(call_id);
+	rpc_data.set_service_id(call_msg->_call._service_id);
+	rpc_data.set_method_id(call_msg->_call._method_id);
+	rpc_data.set_content(*call_msg->_call._req_data);
+	std::string data_buf;
+	rpc_data.SerializeToString(&data_buf);
+	if (-1 == bufferevent_write(_bev, data_buf.c_str(), data_buf.size())) {
+			call_msg->_controller->SetFailed("bufferevent_write Failed");
+	}
+CALL_FINALLY:
+	if (call_msg->_call._req_data)
+		delete call_msg->_call._req_data;
+	if (call_msg->_controller->Failed()) {
+		RpcCallBack(cb._c, cb._wake_fd);
+		if (call_id != 0)
+			FreeCallId();
+	}
+}
+
+void Session::OnCallBack(struct evbuffer *input) {
+	size_t buf_len;
+	for (;;) {
+		switch (_state) {
+			case Session::ST_HEAD: {
+				buf_len = evbuffer_get_length(input);
+				if (buf_len < HEAD_LEN) return ;
+				evbuffer_remove(input, _data_length, HEAD_LEN);
+				_state = Session::ST_DATA;
+				break;
+			}
+			case Session::ST_DATA: {
+				buf_len = evbuffer_get_length(input);
+				if (buf_len < _data_length) return ;
+				RPC::RpcResponseData rpc_data;
+				rpc_data.ParseFromArray(evbuffer_pullup(input, _data_length));
+				Session::TCallBack *cb = GetCallBack(rpc_data.call_id());
+				if (cb) {
+					cb->_response->ParseFromString(rpc_data.content());
+					RpcCallBack(cb->_c, cb->_wake_fd);
+				}
+				FreeCallId(rpc_data.call_id()); //TODO: Destroy Session
+				_state = Session::ST_HEAD;
+				break;
+			}
+			default: {
+				ERR_LOG("Error Session state");
+				break;
+			}
+		}
+	}
 }
 
 RpcClient():_sessions(MAX_SESSION_SIZE),_is_start(false) {
@@ -190,6 +172,7 @@ bool RpcClient::Start(::google::protobuf::RpcController *controller) {
 	_start_mutex.Unlock();
 	return true;
 }
+
 
 bool RpcClient::CallMsgEnqueue(unsigned int session_id, std::string *req_data, 
 	unsigned int service_id, unsigned int method_id,

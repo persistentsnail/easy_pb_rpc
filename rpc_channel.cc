@@ -60,5 +60,5 @@ void RpcChannel::Connect(google::protobuf::RpcController *controller) {
 RpcChannel::~RpcChannel() {
 	close(_write_pipe);
 	close(_read_pipe);
-	_client->FreeSession(_session_id);
+	_client->FreeSession(_session_id); //TODO: Not Destory util all calls return
 }

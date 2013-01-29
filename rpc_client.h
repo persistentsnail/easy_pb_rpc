@@ -47,12 +47,12 @@ namespace PBRPC {
 
 	class Session {
 		TAllocator<TCallBack, SYNC::NullMutex> _calls;
-
-	public:
 		struct bufferevent *_bev;
 		enum STATE {ST_HEAD, ST_DATA};
 		LENGTH_TYPE _data_length;
 		STATE _state;
+
+	public:
 
 		struct TCallBack {
 			google::protobuf::RpcController *_controller;
@@ -61,6 +61,7 @@ namespace PBRPC {
 			int _wake_fd;
 		};
 		Session():_calls(256) {}
+	protected:
 		inline unsigned int AllocCallId() {
 			return _calls.Alloc();
 		}
@@ -75,6 +76,10 @@ namespace PBRPC {
 			_state = ST_HEAD;
 			_data_length = 0;
 		}
+	public:
+		void Connect(MessageQueue::Node *conn_msg);
+		void DoRpcCall(MessageQueue::Node *call_msg);
+		void OnCallBack(struct evbuffer *input);
 	};
 
 	class RpcClient {
