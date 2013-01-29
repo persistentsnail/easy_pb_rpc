@@ -23,9 +23,12 @@ inline void RpcCallBack( google::protobuf::Closure *c, int wake_fd) {
 
 inline void ErrorCb(struct bufferevent *bev, short error, void *arg) {
 	Session *the_session = (Session *)ptr;
-	the_session->_bev = NULL;
-	ERR_LOG("read rpc sock failed with error");
-	bufferevent_free(bev);
+	if (error & BEV_EVENT_EOF) {
+		the_session->_bev = NULL;
+	} else {
+		ERR_LOG("read rpc sock failed with error");
+	}
+	the_session->DisConnect();
 }
 
 inline void ReadCb(struct bufferevent *bev, void *ptr) {
@@ -56,6 +59,11 @@ inline void DoRpc(int notifier_read_handle, short event, void *arg) {
 	delete msg;
 }
 
+inline void RecycleSessionTimer(evutil_socket_t fd, short what, void *arg) {
+	RpcClient *clt = (RpcClient *)arg;
+	clt->DoRecycleSession();
+}
+
 inline void * ThreadEntry(void *arg) {
 	RpcClient *this_clt = (RpcClient *)arg;
 	int notifier_read_handle = this_clt->GetNotifierReadHandle();
@@ -65,6 +73,10 @@ inline void * ThreadEntry(void *arg) {
 	struct event *listener = event_new(evbase, notifier_read_handle, EV_READ|EV_PERSIST,
 		DoRpc, arg);
 	event_add(listener, NULL);
+
+	struct timeval interval = {5, 0};
+	struct event *timer_event = event_new(evbase, -1, EV_PERSIST, RecycleSessionTimer, this_clt);
+	event_add(timer_event, &interval);
 	event_base_dispatch(evbase);
 }
 
@@ -83,6 +95,11 @@ void Session::Connect(MessageQueue::Node *conn_msg) {
 		the_session->InitSession(bev);
 }
 
+void Session::DisConnect() {
+	bufferevent_free(_bev);
+	_bev = NULL;
+}
+
 void Session::DoRpcCall(MessageQueue::Node *call_msg) {
 	if (!_bev) {
 		call_msg->_controller->SetFailed("Session has disconnect");
@@ -90,7 +107,10 @@ void Session::DoRpcCall(MessageQueue::Node *call_msg) {
 	}
 
 	unsigned int call_id = 0;
-	call_id = AllocCallId();
+	if (!(call_id = AllocCallId())) {
+		call_msg->_controller->SetFailed("Call id alloc failed");
+		goto CALL_FINALLY;
+	}
 	TCallBack *cb = GetCallBack(call_id);
 	cb._controller = call_msg->_call._cb._controller;
 	cb._response = call_msg->_call._cb._response;
@@ -108,6 +128,7 @@ void Session::DoRpcCall(MessageQueue::Node *call_msg) {
 	if (-1 == bufferevent_write(_bev, data_buf.c_str(), data_buf.size())) {
 			call_msg->_controller->SetFailed("bufferevent_write Failed");
 	}
+
 CALL_FINALLY:
 	if (call_msg->_call._req_data)
 		delete call_msg->_call._req_data;
@@ -151,7 +172,11 @@ void Session::OnCallBack(struct evbuffer *input) {
 	}
 }
 
-RpcClient():_sessions(MAX_SESSION_SIZE),_is_start(false) {
+RpcClient():_sessions(MAX_SESSION_SIZE),_is_start(false),_nrecycle_ss(0) {
+}
+
+~RpcClient() {
+	event_base_free(_evbase);
 }
 
 bool RpcClient::Start(::google::protobuf::RpcController *controller) {

@@ -1,9 +1,11 @@
 
-#include <google/protobuf/service.h>
 #include <string>
 #include <event2/event.h>
 #include <event2/buffer.h>
 #include <event2/bufferevent.h>
+#include <google/protobuf/service.h>
+#include "util.h"
+
 
 namespace PBRPC {
 
@@ -33,24 +35,55 @@ namespace PBRPC {
 					}_connect;
 				};
 
-				Node *_next;
+				Node *_next, *_prev;
 			};
 	private:
 			Node *_head, *_tail;
+			SYNC::Mutex _mutex;
 
 	public:
 			MessageQueue():_head(NULL), _tail(NULL) {}
-			bool Enqueue(Node *message);
+			bool Enqueue(Node *message) {
+				_mutex.Lock();
+				if (!_head) {
+					_head = _tail = message;
+					message->_next = NULL;
+					message->_prev = NULL;
+				} else {
+					message->_next = _head;
+					_head->_prev = message;
+					_head = message;
+					message->_prev = NULL;
+				}
+				_mutex.Unlock();
+				return true;
+			}
 					
-			Node * Dequeue();
+			Node * Dequeue() {
+				Node *last = NULL;
+				_mutex.Lock();
+				if (!_head)
+					return NULL;
+				else {
+					last = _tail;
+					_tail = _tail->_prev;
+					if (!_tail) _head = NULL;
+					else _tail->_next = NULL;
+				}
+				_mutex.Unlock();
+				return last;
+			}
 	};
 
 	class Session {
 		TAllocator<TCallBack, SYNC::NullMutex> _calls;
+
 		struct bufferevent *_bev;
 		enum STATE {ST_HEAD, ST_DATA};
 		LENGTH_TYPE _data_length;
 		STATE _state;
+
+		unsigned int _ncalls;
 
 	public:
 
@@ -63,9 +96,12 @@ namespace PBRPC {
 		Session():_calls(256) {}
 	protected:
 		inline unsigned int AllocCallId() {
-			return _calls.Alloc();
+			unsigned int id = _calls.Alloc();
+			if (id) _ncalls++;
+			return id;
 		}
 		inline void FreeCallId(unsigned int call_id) {
+			_ncalls--;
 			_calls.Free(call_id);
 		}
 		TCallBack *GetCallBack(unsigned int call_id) {
@@ -75,11 +111,18 @@ namespace PBRPC {
 			_bev = bev;
 			_state = ST_HEAD;
 			_data_length = 0;
+			_ncalls = 0;
 		}
+
 	public:
 		void Connect(MessageQueue::Node *conn_msg);
+		void DisConnect();
 		void DoRpcCall(MessageQueue::Node *call_msg);
 		void OnCallBack(struct evbuffer *input);
+
+		bool CanDestroy() {
+			return !_bev || !_ncalls;
+		}
 	};
 
 	class RpcClient {
@@ -90,6 +133,8 @@ namespace PBRPC {
 
 			TAllocator<Session, SYNC::NullMutex> _sessions;
 			enum {MAX_SESSION_SIZE = 1024};
+			unsigned int _recycle_sessions[MAX_SESSION_SIZE];
+			unsigned int _nrecycle_ss;
 
 			int _notifier_pipe[2];
 
@@ -115,15 +160,27 @@ namespace PBRPC {
 				return _sessions.Alloc();
 			}
 			void FreeSession(unsigned int session_id) {
-				_session.Free(session_id);
+				assert(_nrecycle_ss < MAX_SESSION_SIZE);
+				_recycle_sessions[_nrecycle_ss++] = session_id;
 			}
 			Session *GetSession(unsigned int session_id) {
 				return _sessions.Get(session_id);
 			}
 
+			void DoRecycleSession() {
+				for (unsigned int i = 0; i < _nrecycle_ss; ;) {
+					unsigned int id = _recycle_sessions[i];
+					Session *checked_one = GetSession(i);
+					if (checked_one && checked_one->CanDestroy()) {
+						_sessions.Free(id);
+						if (--_nrecycle_ss > 0)
+							_recycle_sessions[i] = _recycle_sessions[_nrecycle_ss];
+					} else i++;
+				}
+			}
+
 			inline int GetNotifierReadHandle() { return _notifier_pipe[0]; }
 			inline void SetEventBase(struct event_base *base) { _evbase = base; }
 			inline struct event_base *GetEventBase() { return _evbase; }
-
 	};
 }
