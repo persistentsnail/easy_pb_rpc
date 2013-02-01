@@ -34,13 +34,13 @@ bool RpcServiceMgr::AddMethod (unsigned int service_id, unsigned int method_id, 
 		return true;
 }
 
-bool RpcServiceMgr::RegisterRpcService(RpcServiceMgr *mgr, Service *rpc_service, unsigned int service_id) {
+bool RpcServiceMgr::RegisterRpcService(Service *rpc_service, unsigned int service_id) {
 	const ServiceDescriptor *service_descriptor = rpc_service->GetDescriptor();
 	for (int i = 0; i < service_descriptor->method_count(); i++) {
 		const MethodDescriptor *method_descriptor = service_descriptor->method(i);	
 		const Message *request_proto = &rpc_service->GetRequestPrototype(method_descriptor); 
 		const Message *response_proto = &rpc_service->GetResponsePrototype(method_descriptor);
-		if (!mgr->AddMethod(service_id, i, method_descriptor,request_proto, 
+		if (!AddMethod(service_id, i, method_descriptor,request_proto, 
 								response_proto, rpc_service))
 			return false;
 	}
@@ -48,15 +48,13 @@ bool RpcServiceMgr::RegisterRpcService(RpcServiceMgr *mgr, Service *rpc_service,
 }
 
 void RpcServiceMgr::HandleRpcCall(unsigned char *call_data, size_t length, std::string &ret_data) {
-	RpcController *rpc_controller = mgr->GetRpcController();
 	RPC::RpcRequestData rpc_data;
 
-	rpc_controller->Reset();
-	mgr->SetCurCaller(caller);
+	_rpc_controller->Reset();
 
-	RpcServiceMgr::MethodData *the_method = mgr->GetMethod(rpc_data.service_id(),
+	RpcServiceMgr::MethodData *the_method = GetMethod(rpc_data.service_id(),
 			rpc_data.method_id());
-	Service *rpc_service = mgr->GetService(rpc_data.service_id());
+	Service *rpc_service = GetService(rpc_data.service_id());
 	rpc_data.ParseFromArray(call_data, length);
 
 	Message *request = the_method->_request_proto->New();

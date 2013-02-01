@@ -21,7 +21,7 @@ namespace PBRPC {
 		};
 		
 		class Pipe {
-		}
+		};
 	};
 
 	template <typename T, typename MUTEX_TRAITS>
@@ -47,7 +47,7 @@ namespace PBRPC {
 		}
 		unsigned int Alloc() {
 			_mutex.Lock();
-			if (_unused_size <= 0) return NULL;
+			if (_unused_size <= 0) return 0;
 			unsigned int id = _unused_ids[--_unused_size];
 			_mutex.Unlock();
 			return id;

@@ -157,7 +157,12 @@ namespace PBRPC {
 								  );
 			MessageQueue::Node *MessageDequeue();
 			unsigned int AllocSession() {
-				return _sessions.Alloc();
+				unsigned int id = _sessions.Alloc();
+				if (id == 0) {
+					DoRecycleSession();
+					return _sessions.Alloc();
+				} else
+					return id;
 			}
 			void FreeSession(unsigned int session_id) {
 				assert(_nrecycle_ss < MAX_SESSION_SIZE);

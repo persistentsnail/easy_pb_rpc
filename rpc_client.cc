@@ -59,10 +59,12 @@ inline void DoRpc(int notifier_read_handle, short event, void *arg) {
 	delete msg;
 }
 
+/*
 inline void RecycleSessionTimer(evutil_socket_t fd, short what, void *arg) {
 	RpcClient *clt = (RpcClient *)arg;
 	clt->DoRecycleSession();
 }
+*/
 
 inline void * ThreadEntry(void *arg) {
 	RpcClient *this_clt = (RpcClient *)arg;
@@ -73,10 +75,11 @@ inline void * ThreadEntry(void *arg) {
 	struct event *listener = event_new(evbase, notifier_read_handle, EV_READ|EV_PERSIST,
 		DoRpc, arg);
 	event_add(listener, NULL);
-
+	/*
 	struct timeval interval = {5, 0};
 	struct event *timer_event = event_new(evbase, -1, EV_PERSIST, RecycleSessionTimer, this_clt);
 	event_add(timer_event, &interval);
+	*/
 	event_base_dispatch(evbase);
 }
 

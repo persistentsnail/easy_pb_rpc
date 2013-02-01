@@ -1,7 +1,7 @@
 #include <string>
 #include <iostream>
-#include <map>
-#include "service_connector.h"
+#include "rpc_channel.h"
+#include "svc_name2id.h
 
 using namespace PBRPC;
 
@@ -13,7 +13,7 @@ void RpcChannel::CallMethod(const MethodDescriptor *method,	::google::protobuf::
 	}
 
 	const string &service_name = method->service()->name();
-	unsigned int service_id = RpcServiceName2Id(service_name);
+	unsigned int service_id = SERVICE_NAME2ID::instance()->RpcServiceName2Id(service_name);
 	if (service_id == INVALID_SERVICE_ID) {
 		controller->SetFailed("The Service Not Support!");
 		return;
@@ -21,15 +21,16 @@ void RpcChannel::CallMethod(const MethodDescriptor *method,	::google::protobuf::
 	std::string * content =  new std::string;
 	request->SerializeToString(content);
 	_client->CallMsgEnqueue(_session_id, content, service_id, method->index(),
-		controller, response, c, _write_pipe);
+		controller, response, done, _write_pipe);
 	
-	if (!c) {
+	if (!done) {
 		char buf;
 		read(_read_pipe, &buf, sizeof(buf));
 	}
 }
 
-RpcChannel::RpcChannel(RpcClient *client, const char *connect_str):_client(client), _conn_str(connect_str) {	
+RpcChannel::RpcChannel(RpcClient *client, const char *connect_str):_client(client), 
+	_conn_str(connect_str), _session_id(0) {	
 	int pipefd[2];
 	pipe(pipefd);
 	_write_pipe = pipefd[1];
@@ -53,6 +54,10 @@ void RpcChannel::Connect(google::protobuf::RpcController *controller) {
 	unsigned short port;
 	std::stringstream ss(port_str);
 	ss >> port;
+
+	_client->Start(controller);
+	if (controller->Failed()) return;
+
 	_session_id = _client->AllocSession();
 	_client->ConnectMsgEnqueue(_session_id, controller, ip, port);
 }

@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "svc_name2id.h"
 
 using namespace PBRPC;
 
@@ -48,7 +49,8 @@ inline void DoAccept(evutil_socket_t listener, short event, void *arg)
 }
 
 bool RpcServer::RegisterService(::google::protobuf::Service *service) {
-	return _service_mgr.RegisterRpcService(service);
+	unsigned int svc_id = SERVICE_NAME2ID::instance()->RpcServiceName2Id(service->name());
+	return _service_mgr.RegisterRpcService(service, svc_id);
 }
 
 void RpcServer::Start() {
@@ -118,7 +120,7 @@ void RpcServer::ProcessRpcData(Connection *conn, struct evbuffer *input) {
 				buf_len = evbuffer_get_length(input);
 				if (buf_len < conn->_data_length) return;
 				std::string ret_str;
-				_service_mgr->RpcCallHandle(evbuffer_pullup(input, conn->_data_length), conn->_data_length, ret_str);
+				_service_mgr->HandleRpcCall(evbuffer_pullup(input, conn->_data_length), conn->_data_length, ret_str);
 				google::protobuf::RpcControl *_rpc_control = _service_mgr->GetRpcControl();
 				if (_rpc_control->Failed()) {
 					ERR_LOG("Process Rpc Call Failed : %s", _rpc_control->ErrorText());
