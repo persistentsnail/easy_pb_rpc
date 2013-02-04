@@ -7,7 +7,7 @@
 
 #include "common.h"
 
-#define ALL_SERVICEs_CFG "servics.cfg"
+#define ALL_SERVICEs_CFG "services.cfg"
 using namespace std;
 
 class SERVICE_NAME2ID {
@@ -36,8 +36,8 @@ public:
 	}
 	SERVICE_NAME2ID() {Init();}
 
-	static SERVICE_NAME2ID *nstance() {
+	static SERVICE_NAME2ID *instance() {
 		static SERVICE_NAME2ID i;
-		return &;
+		return &i;
 	}
 };

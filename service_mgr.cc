@@ -4,23 +4,25 @@
 #include <stdlib.h>
 #include <vector>
 #include <string>
+#include "service_mgr.h"
 
 using namespace ::google::protobuf;
 using namespace PBRPC;
 
 
-~RpcServiceMgr() {
+RpcServiceMgr::~RpcServiceMgr() {
 	std::vector<unsigned int>::iterator iter;
 	for (iter = _service_ids.begin(); iter != _service_ids.end(); iter++) {
-		Service *rpc_service = _services[*iter]->_rpc_service;
+		Service *rpc_service = _services[*iter]._rpc_service;
 		delete rpc_service;
 	}
+	delete [] _services;
 }
 
 bool RpcServiceMgr::AddMethod (unsigned int service_id, unsigned int method_id, const MethodDescriptor *method_descriptor, 
 	const Message *request_proto, const Message *response_proto, Service *rpc_service) {
 		if (service_id < 0 || service_id >= MAX_RPC_SERVICEs || method_id < 0 || method_id >= MAX_SERVICE_METHODs) {
-			_rpc_controller->SetFailed("Service Id or Method Id is INVALID");
+			ERR_LOG("Service Id or Method Id is INVALID");
 			return false;
 		}
 
@@ -47,28 +49,27 @@ bool RpcServiceMgr::RegisterRpcService(Service *rpc_service, unsigned int servic
 	return true;
 }
 
-void RpcServiceMgr::HandleRpcCall(unsigned char *call_data, size_t length, std::string &ret_data) {
+void RpcServiceMgr::HandleRpcCall(unsigned char *call_data, size_t length, std::string &ret_data, google::protobuf::RpcController *controller) {
 	RPC::RpcRequestData rpc_data;
-
-	_rpc_controller->Reset();
+	rpc_data.ParseFromArray(call_data, length);
+	controller->Reset();
 
 	RpcServiceMgr::MethodData *the_method = GetMethod(rpc_data.service_id(),
 			rpc_data.method_id());
 	Service *rpc_service = GetService(rpc_data.service_id());
-	rpc_data.ParseFromArray(call_data, length);
 
 	Message *request = the_method->_request_proto->New();
 	Message *response = the_method->_response_proto->New();
 	request->ParseFromString(rpc_data.content());
 
-	rpc_service->CallMethod(the_method->_method_descriptor, rpc_controller, request, response, NULL);
+	rpc_service->CallMethod(the_method->_method_descriptor, controller, request, response, NULL);
 
-	RPC::RpcResponseData rpc_data;
+	RPC::RpcResponseData response_data;
 	std::string content;
-	rpc_data.set_call_id(call_id);
+	response_data.set_call_id(rpc_data.call_id());
 	response->SerializeToString(&content);
-	rpc_data.set_content(content); 
-	rpc_data.SerializeToString(&ret_data);
+	response_data.set_content(content); 
+	response_data.SerializeToString(&ret_data);
 
 	delete request;
 	delete response;

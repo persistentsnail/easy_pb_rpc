@@ -4,57 +4,28 @@
 
 #include "common.h"
 #include "service_mgr.h"
+#include "util.h"
 
 namespace PBRPC {
-	class RpcServer {
-		struct Connection {
+	struct Connection {
 			enum STATE {ST_HEAD, ST_DATA};
 			STATE _state;
 			LENGTH_TYPE _data_length;
 			int _id;
-			bufferevent *_bev;
-
-			void *_arg;
 		};
 
-		class ConnectionMgr {
-			Connection _AllConnections[MAX_RPC_CONNECTIONs];
 
-			int _UnusedIds[MAX_RPC_CONNECTIONs];
-			unsigned int _Unused_Num;
-		public:
-			RpcClientMgr():_Unused_Num(MAX_RPC_CONNECTIONs) {
-				for (int i = 0; i < MAX_RPC_CONNECTIONs; i++) {
-					_AllConnections[i]._id = i;
-					_UnusedIds[i] = i;
-				}
-			}
-
-			inline Connection * Add() {
-				if (_Unused_Num <= 0)
-					return NULL;
-				return &_AllConnections[_UnusedIds[--_Unused_Num]];
-			}
-
-			inline void Remove(Connection *conn) {
-				assert(_Unused_Num < MAX_RPC_CONNECTIONs);
-				_UnusedIds[_Unused_Num++] = conn->_id;
-			}
-
-			inline unsigned int Total() {
-				return MAX_RPC_CONNECTIONs - _Unused_Num;
-			}
-		};
-
+	class RpcServer {
 	private:
 		RpcServiceMgr _service_mgr;
-		ConnectionMgr _conn_mgr;
-		event_base *_ev_base;
-	protected:
-		void NewConnection(evutil_socket_t connfd);
-		void RemoveConnection(Connection *conn);
-		void ProcessRpcData(Connection *conn, struct evbuffer *input);
+		TAllocator<Connection, SYNC::NullMutex> _conn_mgr;
+		struct event_base *_ev_base;
 	public:
+		void NewConnection(evutil_socket_t connfd);
+		void RemoveConnection(unsigned int conn_id);
+		void ProcessRpcData(struct bufferevent *bev, unsigned int conn_id, struct evbuffer *input);
+	public:
+		RpcServer():_conn_mgr(MAX_RPC_CONNECTIONs),_ev_base(NULL) {}
 		bool RegisterService(::google::protobuf::Service *service);
 		void Start();
 	};

@@ -1,19 +1,30 @@
 #include <string>
+#include <sstream>
 #include <iostream>
+
+// for inet_aton
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+//
+//
 #include "rpc_channel.h"
-#include "svc_name2id.h
+#include "svc_name2id.h"
+
+#include <google/protobuf/message.h>
+
 
 using namespace PBRPC;
+using google::protobuf::MethodDescriptor;
 
-void RpcChannel::CallMethod(const MethodDescriptor *method,	::google::protobuf::RpcController *controller,
-								const Message *request, Message *response,	Closure *done) {
+void RpcChannel::CallMethod(const MethodDescriptor *method,	::google::protobuf::RpcController *controller, const Message *request, Message *response, Closure *done) {
 	if (!_session_id) {
 		Connect(controller);
 		if (controller->Failed()) return;
 	}
 
 	const string &service_name = method->service()->name();
-	unsigned int service_id = SERVICE_NAME2ID::instance()->RpcServiceName2Id(service_name);
+	unsigned int service_id = SERVICE_NAME2ID::instance()->RpcServiceName2Id(service_name.c_str());
 	if (service_id == INVALID_SERVICE_ID) {
 		controller->SetFailed("The Service Not Support!");
 		return;
@@ -47,7 +58,7 @@ void RpcChannel::Connect(google::protobuf::RpcController *controller) {
 	std::string port_str = _conn_str.substr(split_pos + 1);
 
 	struct in_addr ip;
-	if (inet_aton(ip_str, &ip) == 0) {
+	if (inet_aton(ip_str.c_str(), &ip) == 0) {
 		controller->SetFailed("Invalid connect Ip");
 		return;
 	}
@@ -59,7 +70,7 @@ void RpcChannel::Connect(google::protobuf::RpcController *controller) {
 	if (controller->Failed()) return;
 
 	_session_id = _client->AllocSession();
-	_client->ConnectMsgEnqueue(_session_id, controller, ip, port);
+	_client->ConnectMsgEnqueue(_session_id, controller, ip, htons(port));
 }
 
 RpcChannel::~RpcChannel() {

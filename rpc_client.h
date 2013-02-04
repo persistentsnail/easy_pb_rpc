@@ -5,6 +5,7 @@
 #include <event2/bufferevent.h>
 #include <google/protobuf/service.h>
 #include "util.h"
+#include "common.h"
 
 
 namespace PBRPC {
@@ -39,12 +40,10 @@ namespace PBRPC {
 			};
 	private:
 			Node *_head, *_tail;
-			SYNC::Mutex _mutex;
 
 	public:
 			MessageQueue():_head(NULL), _tail(NULL) {}
 			bool Enqueue(Node *message) {
-				_mutex.Lock();
 				if (!_head) {
 					_head = _tail = message;
 					message->_next = NULL;
@@ -55,13 +54,11 @@ namespace PBRPC {
 					_head = message;
 					message->_prev = NULL;
 				}
-				_mutex.Unlock();
 				return true;
 			}
 					
 			Node * Dequeue() {
 				Node *last = NULL;
-				_mutex.Lock();
 				if (!_head)
 					return NULL;
 				else {
@@ -70,12 +67,23 @@ namespace PBRPC {
 					if (!_tail) _head = NULL;
 					else _tail->_next = NULL;
 				}
-				_mutex.Unlock();
 				return last;
 			}
 	};
 
+	class RpcClient;
+
 	class Session {
+	public:
+
+		struct TCallBack {
+			google::protobuf::RpcController *_controller;
+			google::protobuf::Message *_response;
+			google::protobuf::Closure *_c;
+			int _wake_fd;
+		};
+	private:
+
 		TAllocator<TCallBack, SYNC::NullMutex> _calls;
 
 		struct bufferevent *_bev;
@@ -85,15 +93,8 @@ namespace PBRPC {
 
 		unsigned int _ncalls;
 
-	public:
+		RpcClient *_owner_clt;
 
-		struct TCallBack {
-			google::protobuf::RpcController *_controller;
-			google::protobuf::Message *_response;
-			google::protobuf::Closure *_c;
-			int _wake_fd;
-		};
-		Session():_calls(256) {}
 	protected:
 		inline unsigned int AllocCallId() {
 			unsigned int id = _calls.Alloc();
@@ -115,31 +116,39 @@ namespace PBRPC {
 		}
 
 	public:
+		Session():_calls(256) {}
 		void Connect(MessageQueue::Node *conn_msg);
-		void DisConnect();
+		void DisConnect(const char *err);
 		void DoRpcCall(MessageQueue::Node *call_msg);
 		void OnCallBack(struct evbuffer *input);
 
 		bool CanDestroy() {
 			return !_bev || !_ncalls;
 		}
+
+		void SetOwner(RpcClient *owner) {
+			_owner_clt = owner;
+		}
 	};
 
 	class RpcClient {
+		friend class Session;
+		public:
+			enum {MAX_SESSION_SIZE = 1024};
+		private:
 			struct event_base *_evbase;	
 
 			MessageQueue _msg_queue;
 			SYNC::Mutex _msg_queue_mutex;
 
 			TAllocator<Session, SYNC::NullMutex> _sessions;
-			enum {MAX_SESSION_SIZE = 1024};
 			unsigned int _recycle_sessions[MAX_SESSION_SIZE];
 			unsigned int _nrecycle_ss;
 
 			int _notifier_pipe[2];
 
 			bool _is_start;
-			SYNC::Mutext _start_mutex;
+			SYNC::Mutex _start_mutex;
 		public:
 			RpcClient();
 			~RpcClient();
@@ -160,9 +169,11 @@ namespace PBRPC {
 				unsigned int id = _sessions.Alloc();
 				if (id == 0) {
 					DoRecycleSession();
-					return _sessions.Alloc();
-				} else
-					return id;
+					id = _sessions.Alloc();
+				}
+				Session * s = GetSession(id);
+				if (s) s->SetOwner(this);
+				return id;
 			}
 			void FreeSession(unsigned int session_id) {
 				assert(_nrecycle_ss < MAX_SESSION_SIZE);
@@ -173,7 +184,7 @@ namespace PBRPC {
 			}
 
 			void DoRecycleSession() {
-				for (unsigned int i = 0; i < _nrecycle_ss; ;) {
+				for (unsigned int i = 0; i < _nrecycle_ss;) {
 					unsigned int id = _recycle_sessions[i];
 					Session *checked_one = GetSession(i);
 					if (checked_one && checked_one->CanDestroy()) {

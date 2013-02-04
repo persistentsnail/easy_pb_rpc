@@ -1,6 +1,8 @@
 #include <google/protobuf/service.h>
+#include <string>
 
 namespace PBRPC {
+	using std::string;
 	class RpcController : public google::protobuf::RpcController {
 		string _error_str;
 		bool _is_failed;
@@ -27,7 +29,8 @@ namespace PBRPC {
 			return false;
 		}
   		
-		void NotifyOnCancel(Closure* callback) { // NOT IMPL
+		void NotifyOnCancel(google::protobuf::Closure* callback) { // NOT IMPL
 			return;
 		}
 	};
+}

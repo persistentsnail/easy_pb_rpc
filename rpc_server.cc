@@ -4,52 +4,52 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "rpc_server.h"
 #include "svc_name2id.h"
+#include "rpc_controller.h"
 
 using namespace PBRPC;
 
 struct ARGDATA {
 	RpcServer *_server;
-	Connection *_conn;
+	unsigned int _conn_id;
 };
 
-inline void ReadCallback(struct bufferevent *bev, void *arg)
-{
+inline void ReadCallback(struct bufferevent *bev, void *arg) {
 	struct evbuffer *input, *output;
 	RpcServer *svr = ((ARGDATA *)arg)->_server;
-	Connection *conn = ((ARGDATA *)arg)->_conn;
+	unsigned int conn_id = ((ARGDATA *)arg)->_conn_id;
 
 	input = bufferevent_get_input(bev);
-	svr->ProcessRpcData(conn, input);
+	svr->ProcessRpcData(bev, conn_id, input);
 }
 
-inline void ErrorCallback(struct bufferevent *bev, short error, void *arg)
-{
+inline void ErrorCallback(struct bufferevent *bev, short error, void *arg) {
 	if (error & BEV_EVENT_EOF) {
 		RpcServer *svr = ((ARGDATA *)arg)->_server;
-		Connection *conn = ((ARGDATA *)arg)->_conn;
-		svr->RemoveConnection(conn);
+		unsigned int conn_id = ((ARGDATA *)arg)->_conn_id;
+		svr->RemoveConnection(conn_id);
 	} else {
 		ERR_LOG("Error Callback!");
 	}
 	bufferevent_free(bev);
 }
 
-inline void DoAccept(evutil_socket_t listener, short event, void *arg)
-{
+inline void DoAccept(evutil_socket_t listener, short event, void *arg) {
 	RpcServer *server = (RpcServer *)arg;
 	struct sockaddr_storage ss;
 	socklen_t slen = sizeof(ss);
 	evutil_socket_t client = accept(listener, (struct sockaddr *)&ss, &slen);
-	if (client < 0)
-		ErrorRet("accept");
+	if (client < 0) 
+		perror("accept");
 	else {
 		server->NewConnection(client);
 	}
 }
 
 bool RpcServer::RegisterService(::google::protobuf::Service *service) {
-	unsigned int svc_id = SERVICE_NAME2ID::instance()->RpcServiceName2Id(service->name());
+	const google::protobuf::ServiceDescriptor *sd = service->GetDescriptor();
+	unsigned int svc_id = SERVICE_NAME2ID::instance()->RpcServiceName2Id(sd->name().c_str());
 	return _service_mgr.RegisterRpcService(service, svc_id);
 }
 
@@ -64,7 +64,7 @@ void RpcServer::Start() {
 
 	sin.sin_family = AF_INET;
 	sin.sin_addr.s_addr = 0;
-	sin.sin_port = htons(RPC_SRV_PORT);
+	sin.sin_port = htons(RPC_SVR_PORT);
 
 	listener = socket(AF_INET, SOCK_STREAM, 0);
 	evutil_make_socket_nonblocking(listener);
@@ -84,28 +84,34 @@ void RpcServer::Start() {
 
 void RpcServer::NewConnection(evutil_socket_t connfd) {
 	struct 	bufferevent *bev;
-	Connection *conn;
-	if ((conn = _conn_mgr.Add()) == NULL) 
+	unsigned int conn_id;
+	if ((conn_id = _conn_mgr.Alloc()) == 0) {
+		ERR_LOG("No connection Id is useable");
 		return;
+	}
+	Connection *conn = _conn_mgr.Get(conn_id);
 	conn->_state = Connection::ST_HEAD;
 	evutil_make_socket_nonblocking(connfd);
 	bev = bufferevent_socket_new(_ev_base, connfd, BEV_OPT_CLOSE_ON_FREE);
-	conn->_bev = bev;
 
 	ARGDATA *arg = new ARGDATA;
 	arg->_server = this;
-	arg->_conn = conn;
-	conn->_arg = arg;
+	arg->_conn_id = conn_id;
 	bufferevent_setcb(bev, ReadCallback, NULL, ErrorCallback, arg);
+	bufferevent_enable(bev, EV_READ | EV_WRITE);
 }
 
-void RpcServer::RemoveConnection(Connection *conn) {
-	delete (ARGDATA *)conn->_arg;
-	_conn_mgr.Remove(conn);
+void RpcServer::RemoveConnection(unsigned int conn_id) {
+	_conn_mgr.Free(conn_id);
 }
 
-void RpcServer::ProcessRpcData(Connection *conn, struct evbuffer *input) {
+void RpcServer::ProcessRpcData(struct bufferevent *bev, unsigned int conn_id, struct evbuffer *input) {
 	size_t buf_len;
+	Connection *conn = _conn_mgr.Get(conn_id);
+	if (!conn) {
+		ERR_LOG("ProcessRpcData Failed : No Id is %d of the Connections", conn_id);
+		return;
+	}
 
 	for (;;) {
 		switch (conn->_state) {
@@ -120,12 +126,12 @@ void RpcServer::ProcessRpcData(Connection *conn, struct evbuffer *input) {
 				buf_len = evbuffer_get_length(input);
 				if (buf_len < conn->_data_length) return;
 				std::string ret_str;
-				_service_mgr->HandleRpcCall(evbuffer_pullup(input, conn->_data_length), conn->_data_length, ret_str);
-				google::protobuf::RpcControl *_rpc_control = _service_mgr->GetRpcControl();
-				if (_rpc_control->Failed()) {
-					ERR_LOG("Process Rpc Call Failed : %s", _rpc_control->ErrorText());
+				RpcController rpc_controller;
+				_service_mgr.HandleRpcCall(evbuffer_pullup(input, conn->_data_length), conn->_data_length, ret_str, &rpc_controller);
+				if (rpc_controller.Failed()) {
+					ERR_LOG("Process Rpc Call Failed : %s", rpc_controller.ErrorText().c_str());
 				} else {
-					evbuffer *output = bufferevent_get_output(conn->_bev);
+					evbuffer *output = bufferevent_get_output(bev);
 					LENGTH_TYPE header = ret_str.size();
 					evbuffer_add(output, &header, HEAD_LEN); 
 					evbuffer_add(output, ret_str.c_str(), ret_str.size());
